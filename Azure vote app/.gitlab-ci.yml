@@ -1,0 +1,41 @@
+stages:
+  - deploy
+
+deploy:
+  stage: deploy
+  image: alpine:latest  # Use an image with Azure CLI installed
+  script:
+    - |
+      export RANDOM_ID="$(openssl rand -hex 3)"
+      export NETWORK_PREFIX="$(($RANDOM % 254 + 1))"
+      export SSL_EMAIL_ADDRESS="$(az account show --query user.name --output tsv)"
+      export MY_RESOURCE_GROUP_NAME="myAKSResourceGroup$RANDOM_ID"
+      export REGION="westeurope"
+      export MY_AKS_CLUSTER_NAME="myAKSCluster$RANDOM_ID"
+      export MY_PUBLIC_IP_NAME="myPublicIP$RANDOM_ID"
+      export MY_DNS_LABEL="mydnslabel$RANDOM_ID"
+      export MY_VNET_NAME="myVNet$RANDOM_ID"
+      export MY_VNET_PREFIX="10.$NETWORK_PREFIX.0.0/16"
+      export MY_SN_NAME="mySN$RANDOM_ID"
+      export MY_SN_PREFIX="10.$NETWORK_PREFIX.0.0/22"
+      export FQDN="${MY_DNS_LABEL}.${REGION}.cloudapp.azure.com"
+      
+      # Create AKS cluster
+      az group create --name $MY_RESOURCE_GROUP_NAME --location $REGION
+      az network vnet create --resource-group $MY_RESOURCE_GROUP_NAME --location $REGION --name $MY_VNET_NAME --address-prefix $MY_VNET_PREFIX --subnet-name $MY_SN_NAME --subnet-prefixes $MY_SN_PREFIX
+      # Register providers if needed
+      az provider register --namespace Microsoft.Insights
+      az provider register --namespace Microsoft.OperationsManagement
+      az provider register --namespace Microsoft.OperationalInsights
+      # Create AKS cluster
+      export MY_SN_ID=$(az network vnet subnet list --resource-group $MY_RESOURCE_GROUP_NAME --vnet-name $MY_VNET_NAME --query "[0].id" --output tsv)
+      az aks create --resource-group $MY_RESOURCE_GROUP_NAME --name $MY_AKS_CLUSTER_NAME --auto-upgrade-channel stable --enable-cluster-autoscaler --enable-addons monitoring --location $REGION --node-count 1 --min-count 1 --max-count 3 --network-plugin azure --network-policy azure --vnet-subnet-id $MY_SN_ID --no-ssh-key --node-vm-size Standard_DS2_v2 --zones 1 2 3
+      # Connect to AKS cluster
+      az aks get-credentials --resource-group $MY_RESOURCE_GROUP_NAME --name $MY_AKS_CLUSTER_NAME --overwrite-existing
+      # Install NGINX Ingress Controller
+      export MY_STATIC_IP=$(az network public-ip create --resource-group MC_${MY_RESOURCE_GROUP_NAME}_${MY_AKS_CLUSTER_NAME}_${REGION} --location ${REGION} --name ${MY_PUBLIC_IP_NAME} --dns-name ${MY_DNS_LABEL} --sku Standard --allocation-method static --version IPv4 --zone 1 2 3 --query publicIp.ipAddress -o tsv)
+      helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
+      helm repo update
+      helm upgrade --install ingress-nginx ingress-nginx/ingress-nginx --namespace ingress-nginx --create-namespace --set controller.service.annotations."service\.beta\.kubernetes\.io/azure-dns-label-name"=$MY_DNS_LABEL --set controller.service.loadBalancerIP=$MY_STATIC_IP --set controller.service.annotations."service\.beta\.kubernetes\.io/azure-load-balancer-health-probe-request-path"=/healthz --wait
+      # Deploy the Application
+      kubectl apply -f azure-vote-start.yml
