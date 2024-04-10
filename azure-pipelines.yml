@@ -1,0 +1,32 @@
+trigger:
+- main
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+- script: echo Hello, world!
+  displayName: 'Run a one-line script'
+
+- script: |
+    echo Add other tasks to build, test, and deploy your project.
+    echo See https://aka.ms/yaml
+  displayName: 'Run a multi-line script'
+
+- script: |
+    sudo apt-get update
+    sudo apt-get install -y python3 python3-pip
+
+    pip3 install selenium
+
+    wget https://chromedriver.storage.googleapis.com/116.0.5845.96/chromedriver_linux64.zip
+    unzip chromedriver_linux64.zip
+    sudo mv chromedriver /usr/local/bin/
+
+  displayName: 'Setup Selenium environment'
+
+- script: |
+    # Run Selenium tests
+    Azure vote app/azure-vote/azure-vote/main.py
+
+  displayName: 'Run Selenium tests'
